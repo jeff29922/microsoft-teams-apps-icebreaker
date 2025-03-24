@@ -1,0 +1,11 @@
+{
+	"version": "2.0.0",
+	"tasks": [
+		{
+			"type": "Live Preview",
+			"workspacePath": "c:\\Users\\jefflebl\\OneDrive - Microsoft\\Code\\Compass Group\\microsoft-teams-apps-icebreaker",
+			"problemMatcher": [],
+			"label": "Live Preview: Run Server"
+		}
+	]
+}

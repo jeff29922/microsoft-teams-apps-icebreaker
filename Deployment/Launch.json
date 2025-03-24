@@ -1,0 +1,21 @@
+{
+  "configurations": [
+    {
+      "type": "coreclr",
+      "request": "launch",
+      "name": "Launch Icebreaker",
+      "program": "${workspaceFolder}/Source/Icebreaker/bin/IceBreaker.dll",
+      "args": [],
+      "cwd": "${workspaceFolder}/Source/Icebreaker",
+      "stopAtEntry": false,
+      "preLaunchTask": "build"
+    }
+  ],
+  "inputs": [
+    {
+      "type": "promptString",
+      "id": "programPath",
+      "description": "Path to the program to debug"
+    }
+  ]
+}

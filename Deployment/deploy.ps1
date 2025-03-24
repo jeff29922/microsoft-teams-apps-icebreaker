@@ -171,75 +171,33 @@ function ValidateParameters {
 # To get the Azure AD app detail. 
 function GetAzureADApp {
     param ($appName)
-    $app = az ad app list --filter "displayName eq '$appName'" | ConvertFrom-Json
+    $app = Get-MgApplication -Filter "displayName eq '$appName'"
     return $app
 }
 
 # Create/re-set Azure AD app.
 function CreateAzureADApp {
     param(
-        [Parameter(Mandatory = $true)] [string] $AppName,
-        [Parameter(Mandatory = $false)] [bool] $MultiTenant = $true,
-        [Parameter(Mandatory = $false)] [bool] $AllowImplicitFlow = $false,
-        [Parameter(Mandatory = $false)] [bool] $ResetAppSecret = $true
+        [Parameter(Mandatory = $true)]
+        [string]$appName,
+        [Parameter(Mandatory = $true)]
+        [string[]]$redirectUris
     )
-        
+
     try {
-        WriteInfo "`r`nCreating Azure AD App: $appName..."
-
-        # Check if the app already exists - script has been previously executed
-        $app = GetAzureADApp $appName
-
-        if (-not ([string]::IsNullOrEmpty($app))) {
-
-            # Update Azure AD app registration using CLI
-            $confirmationTitle = "The Azure AD app '$appName' already exists. If you proceed, this will update the existing app configuration."
-            $confirmationQuestion = "Do you want to proceed?"
-            $confirmationChoices = "&Yes", "&No" # 0 = Yes, 1 = No
-            
-            $updateDecision = $Host.UI.PromptForChoice($confirmationTitle, $confirmationQuestion, $confirmationChoices, 1)
-            if ($updateDecision -eq 0) {
-                WriteInfo "Updating the existing app..."
-
-                az ad app update --id $app.appId --available-to-other-tenants $MultiTenant --oauth2-allow-implicit-flow $AllowImplicitFlow
-
-                WriteInfo "Waiting for app update to finish..."
-
-                Start-Sleep -s 10
-
-                WriteSuccess "Azure AD App: $appName is updated."
-            } else {
-                WriteError "Deployment canceled. Please use a different name for the Azure AD app and try again."
-                return $null
-            }
-        } else {
-            # Create Azure AD app registration using CLI
-            az ad app create --display-name $appName --available-to-other-tenants $MultiTenant --oauth2-allow-implicit-flow $AllowImplicitFlow
-
-            WriteInfo "Waiting for app creation to finish..."
-
-            Start-Sleep -s 10
-
-            WriteSuccess "Azure AD App: $appName is created."
+        WriteInfo "Creating Azure AD application: $appName"
+        $app = New-MgApplication -DisplayName $appName -Web @{ RedirectUris = $redirectUris } -SignInAudience "AzureADMyOrg"
+        $passwordCredential = Add-MgApplicationPassword -ApplicationId $app.Id
+        WriteSuccess "Azure AD app '$appName' created successfully."
+        return @{
+            appId = $app.AppId
+            password = $passwordCredential.SecretText
         }
-
-        $app = GetAzureADApp $appName
-        
-        $appSecret = $null;
-        # Reset the app credentials to get the secret. The default validity of this secret will be for 1 year from the date its created. 
-        if ($ResetAppSecret) {
-            WriteInfo "Updating app secret..."
-            $appSecret = az ad app credential reset --id $app.appId --append | ConvertFrom-Json;
-        }
-
-        WriteSuccess "Azure AD App: $appName registered successfully."
-        return $appSecret
     }
     catch {
-        $errorMessage = $_.Exception.Message
-        WriteError "Failed to register/configure the Azure AD app. Error message: $errorMessage"
+        WriteError "Failed to create Azure AD app: $_"
+        return $null
     }
-    return $null
 }
 
 #to get the deployment log with the help of logged in user detail.
@@ -248,7 +206,7 @@ function CollectARMDeploymentLogs {
     $activityLogPath = "$logsPath\activity_log.log"
     $deploymentLogPath = "$logsPath\deployment_operation.log"
 
-    $logsFolder = New-Item -ItemType Directory -Force -Path $logsPath
+    New-Item -ItemType Directory -Force -Path $logsPath
 
     az deployment operation group list --resource-group $parameters.resourceGroupName.Value --subscription $parameters.subscriptionId.Value --name azuredeploy --query "[?properties.provisioningState=='Failed'].properties.statusMessage.error" | Set-Content $deploymentLogPath
 
@@ -356,7 +314,7 @@ function DeployARMTemplate {
 
         # Deploy ARM templates
         WriteInfo "`nDeploying app services, Azure function, bot service, and other supporting resources..."
-        $armDeploymentResult = az deployment group create --resource-group $parameters.resourceGroupName.Value --subscription $parameters.subscriptionId.Value --template-file 'azuredeploy.json' --parameters "botAppID=$userappId" "botAppPassword=$usersecret" "appName=$($parameters.baseResourceName.Value)" "tenantId=$($parameters.tenantId.Value)" "appDescription=$($parameters.appDescription.Value)" "appIconUrl=$($parameters.appIconUrl.Value)" "pairingWeekInterval=$($parameters.pairingWeekInterval.Value)" "pairingDayOfWeek=$($parameters.pairingDayOfWeek.Value)" "pairingHour=$($parameters.pairingHour.Value)" "pairingTimeZone=$($parameters.pairingTimeZone.Value)" "pairingStartKey=$($parameters.pairingStartKey.Value)" "sku=$($parameters.sku.Value)" "planSize=$($parameters.planSize.Value)" "location=$($parameters.location.Value)" "gitRepoUrl=$($parameters.gitRepoUrl.Value)" "gitBranch=$($parameters.gitBranch.Value)" "DefaultCulture=$($parameters.defaultCulture.Value)"
+        az deployment group create --resource-group $parameters.resourceGroupName.Value --subscription $parameters.subscriptionId.Value --template-file 'azuredeploy.json' --parameters "botAppID=$userappId" "botAppPassword=$usersecret" "appName=$($parameters.baseResourceName.Value)" "tenantId=$($parameters.tenantId.Value)" "appDescription=$($parameters.appDescription.Value)" "appIconUrl=$($parameters.appIconUrl.Value)" "pairingWeekInterval=$($parameters.pairingWeekInterval.Value)" "pairingDayOfWeek=$($parameters.pairingDayOfWeek.Value)" "pairingHour=$($parameters.pairingHour.Value)" "pairingTimeZone=$($parameters.pairingTimeZone.Value)" "pairingStartKey=$($parameters.pairingStartKey.Value)" "sku=$($parameters.sku.Value)" "planSize=$($parameters.planSize.Value)" "location=$($parameters.location.Value)" "gitRepoUrl=$($parameters.gitRepoUrl.Value)" "gitBranch=$($parameters.gitBranch.Value)" "DefaultCulture=$($parameters.defaultCulture.Value)"
 
         $deploymentExceptionMessage = "ERROR: ARM template deployment error."
         if ($LASTEXITCODE -ne 0) {
@@ -442,8 +400,9 @@ function GenerateAppManifestPackage {
 }
 
 function logout {
-    $logOut = az logout
-    $disAzAcc = Disconnect-AzAccount
+    Disconnect-MgGraph
+    Disconnect-AzAccount
+    WriteInfo "Logged out from Azure and Microsoft Graph."
 }
 
 function InstallDependencies {
@@ -465,7 +424,7 @@ function InstallDependencies {
         $updatedecision = $host.ui.promptforchoice($confirmationtitle, $confirmationquestion, $confirmationchoices, 1)
         if ($updatedecision -eq 0) {
             WriteInfo "Installing Azure CLI ..."
-            Invoke-WebRequest -Uri https://aka.ms/installazurecliwindows -OutFile .\AzureCLI.msi; Start-Process msiexec.exe -Wait -ArgumentList '/I AzureCLI.msi /quiet'; rm .\AzureCLI.msi
+            Invoke-WebRequest -Uri https://aka.ms/installazurecliwindows -OutFile .\AzureCLI.msi; Start-Process msiexec.exe -Wait -ArgumentList '/I AzureCLI.msi /quiet'; Remove-Item .\AzureCLI.msi
             WriteSuccess "Azure CLI is installed! Please close this PowerShell window and re-run this script in a new PowerShell session."
             EXIT
         } else {
@@ -477,55 +436,36 @@ function InstallDependencies {
     }
 
     # Installing required modules
-    WriteInfo "Checking if the required modules are installed..."
-    $isAvailable = $true
-    if ((Get-Module -ListAvailable -Name "Az.*")) {
-        WriteInfo "Az module is available."
-    } else {
-        WriteWarning "Az module is missing."
-        $isAvailable = $false
+    WriteInfo "Checking if required modules are installed..."
+    $requiredModules = @("Az", "Microsoft.Graph", "WriteAscii")
+    foreach ($module in $requiredModules) {
+        if (!(Get-Module -ListAvailable -Name $module)) {
+            WriteWarning "$module module is missing."
+            $isAvailable = $false
+        } else {
+            WriteInfo "$module module is available."
+        }
     }
 
-    if ((Get-Module -ListAvailable -Name "AzureAD")) {
-        WriteInfo "AzureAD module is available."
-    } else {
-        WriteWarning "AzureAD module is missing."
-        $isAvailable = $false
-    }
-
-    if ((Get-Module -ListAvailable -Name "WriteAscii")) {
-        WriteInfo "WriteAscii module is available."
-    } else {
-        WriteWarning "WriteAscii module is missing."
-        $isAvailable = $false
-    }
-
-    if (-not $isAvailable)
-    {
-        $confirmationTitle = WriteInfo "The script requires the following modules to deploy: `n 1.Az module`n 2.AzureAD module `n 3.WriteAscii module`nIf you proceed, the script will install the missing modules."
-        $confirmationQuestion = "Do you want to proceed?"
-        $confirmationChoices = "&Yes", "&No" # 0 = Yes, 1 = No
-                
-        $updateDecision = $Host.UI.PromptForChoice($confirmationTitle, $confirmationQuestion, $confirmationChoices, 1)
-            if ($updateDecision -eq 0) {
-                if (-not (Get-Module -ListAvailable -Name "Az.*")) {
-                    WriteInfo "Installing AZ module..."
-                    Install-Module Az -AllowClobber -Scope CurrentUser
+    if (-not $isAvailable) {
+        WriteWarning "Some required modules are missing."
+        $confirmationTitle = "Missing modules detected."
+        $confirmationQuestion = "Do you want to install missing modules now?"
+        $confirmationChoices = "&Yes", "&No"
+        $updateDecision = $host.ui.PromptForChoice($confirmationTitle, $confirmationQuestion, $confirmationChoices, 1)
+        if ($updateDecision -eq 0) {
+            foreach ($module in $requiredModules) {
+                if (-not (Get-Module -ListAvailable -Name $module)) {
+                    WriteInfo "Installing module: $module"
+                    Install-Module $module -Scope CurrentUser -Force -AllowClobber
                 }
-
-                if (-not (Get-Module -ListAvailable -Name "AzureAD")) {
-                    WriteInfo "Installing AzureAD module..."
-                    Install-Module AzureAD -Scope CurrentUser -Force
-                }
-                
-                if (-not (Get-Module -ListAvailable -Name "WriteAscii")) {
-                    WriteInfo "Installing WriteAscii module..."
-                    Install-Module WriteAscii -Scope CurrentUser -Force
-                }
-            } else {
-                WriteError "You may install the modules manually by following the below link. Please re-run the script after the modules are installed. `nhttps://docs.microsoft.com/en-us/powershell/module/powershellget/install-module?view=powershell-7"
-                EXIT
             }
+            WriteSuccess "Modules installed. Please restart PowerShell and re-run the script."
+            EXIT
+        } else {
+            WriteError "Please install required modules manually and re-run the script."
+            EXIT
+        }
     } else {
         WriteSuccess "All the modules are available!"
     }
@@ -561,7 +501,17 @@ function InstallDependencies {
         EXIT
     }
 
-    $userAlias = (($user | ConvertFrom-Json) | where {$_.id -eq $parameters.subscriptionId.Value}).user.name
+    $userAlias = (($user | ConvertFrom-Json) | Where-Object { $_.id -eq $parameters.subscriptionId.Value }).user.name
+
+    WriteInfo "Logging into Microsoft Graph."
+    try {
+        Connect-MgGraph -TenantId $parameters.subscriptionTenantId.Value -Scopes "Application.ReadWrite.All"
+        WriteSuccess "Successfully logged into Microsoft Graph."
+    }
+    catch {
+        WriteError "Failed to log into Microsoft Graph. $_"
+        exit 1
+    }
 
     # Create User App
     $userAppCred = CreateAzureADApp $parameters.baseResourceName.Value
